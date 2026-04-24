@@ -5,20 +5,24 @@ import os
 
 API_KEY = os.getenv("API_KEY")
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
+BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
 
 SYMBOL = "XAU/USD"
 INTERVAL = "5min"
-OUTPUT = 200
+
+last_update_id = None
+last_signal = ""
 
 # =========================
 def get_data():
-    url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={INTERVAL}&outputsize={OUTPUT}&apikey={API_KEY}"
+    url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={INTERVAL}&outputsize=200&apikey={API_KEY}"
     data = requests.get(url).json()
 
     df = pd.DataFrame(data["values"])
-    df = df.iloc[::-1]  # reverse
+    df = df.iloc[::-1]
 
     df["close"] = df["close"].astype(float)
     df["high"] = df["high"].astype(float)
@@ -43,12 +47,14 @@ def indicators(df):
     return df
 
 # =========================
-def analyze(df):
+def analyze():
+    df = get_data()
     df = indicators(df)
+
     last = df.iloc[-1]
 
     if pd.isna(last["atr"]):
-        return None
+        return "No data yet..."
 
     price = last["close"]
     atr = last["atr"]
@@ -56,48 +62,71 @@ def analyze(df):
     uptrend = last["ma20"] > last["ma50"]
     downtrend = last["ma20"] < last["ma50"]
 
-    # BUY
     if uptrend and last["rsi"] < 55:
         return f"""🔥 BUY GOLD (XAUUSD)
 Entry: {round(price,2)}
 TP: {round(price + atr*2,2)}
 SL: {round(price - atr,2)}"""
 
-    # SELL
     if downtrend and last["rsi"] > 45:
         return f"""🔥 SELL GOLD (XAUUSD)
 Entry: {round(price,2)}
 TP: {round(price - atr*2,2)}
 SL: {round(price + atr,2)}"""
 
-    return None
+    return "❌ No clear signal now"
 
 # =========================
-def send(msg):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.get(url, params={"chat_id": CHAT_ID, "text": msg})
+def send(chat_id, text):
+    requests.get(f"{BASE_URL}/sendMessage", params={
+        "chat_id": chat_id,
+        "text": text
+    })
 
 # =========================
-def main():
-    last_signal = ""
+def check_messages():
+    global last_update_id
 
-    while True:
-        try:
-            df = get_data()
-            signal = analyze(df)
+    url = f"{BASE_URL}/getUpdates"
+    params = {"timeout": 100, "offset": last_update_id}
 
-            if signal and signal != last_signal:
-                send(signal)
+    res = requests.get(url, params=params).json()
+
+    for update in res["result"]:
+        last_update_id = update["update_id"] + 1
+
+        message = update.get("message", {})
+        chat_id = message.get("chat", {}).get("id")
+        text = message.get("text", "")
+
+        # ===== COMMANDS =====
+        if text == "/start":
+            send(chat_id, "🤖 GOLD BOT READY\n\nType /signal to get trade signal")
+
+        elif text == "/signal":
+            result = analyze()
+            send(chat_id, result)
+
+        elif text == "/help":
+            send(chat_id, "/start\n/signal\n/help")
+
+# =========================
+def auto_signal():
+    global last_signal
+
+    try:
+        signal = analyze()
+
+        if "BUY" in signal or "SELL" in signal:
+            if signal != last_signal:
+                send(CHAT_ID, signal)
                 print(signal)
                 last_signal = signal
-            else:
-                print("No signal")
-
-        except Exception as e:
-            print("Error:", e)
-
-        time.sleep(300)
+    except Exception as e:
+        print("Error:", e)
 
 # =========================
-if __name__ == "__main__":
-    main()
+while True:
+    check_messages()   # reply to user
+    auto_signal()      # send auto signals
+    time.sleep(30)
