@@ -13,9 +13,10 @@ user_pair = None
 user_chat_id = None
 bot_active = False
 
-last_signal_sent = ""
-last_presignal_sent = ""
 current_trade = None
+
+wins = 0
+losses = 0
 
 # =========================
 def get_symbol(pair):
@@ -62,13 +63,7 @@ def analyze(pair):
     df = get_data(pair)
     df = indicators(df)
 
-    support = df["low"].rolling(20).min().iloc[-1]
-    resistance = df["high"].rolling(20).max().iloc[-1]
-
     last = df.iloc[-1]
-
-    if pd.isna(last["atr"]):
-        return "wait", "Loading...", None
 
     price = last["close"]
     atr = last["atr"]
@@ -78,28 +73,21 @@ def analyze(pair):
     ma50 = last["ma50"]
 
     uptrend = ma20 > ma50
-    downtrend = ma20 < ma50
-
-    near_support = abs(price - support) < atr
-    near_resistance = abs(price - resistance) < atr
 
     # ===== CONFIDENCE =====
     score = 0
 
-    if uptrend or downtrend:
+    if ma20 > ma50 or ma20 < ma50:
         score += 25
 
     if 40 < rsi < 60:
         score += 25
 
-    if near_support or near_resistance:
+    if atr < price * 0.01:
         score += 25
 
-    if atr < price * 0.01:
-        score += 15
-
     if abs(df["close"].iloc[-1] - df["close"].iloc[-2]) > atr * 0.2:
-        score += 10
+        score += 25
 
     confidence = score
 
@@ -110,49 +98,34 @@ def analyze(pair):
     else:
         strength = "⚠️ WEAK"
 
-    # ===== SIGNAL =====
-    if uptrend and 40 < rsi < 55 and near_support:
-        entry = round(price,5)
-        tp1 = round(price+atr,5)
-        sl = round(price-atr,5)
+    # ===== FORCE SIGNAL =====
+    entry = round(price,5)
 
-        trade = {"type":"BUY","tp1":tp1,"sl":sl,"pair":pair}
+    if uptrend:
+        tp1 = round(price + atr,5)
+        sl = round(price - atr,5)
+        trade_type = "BUY"
+    else:
+        tp1 = round(price - atr,5)
+        sl = round(price + atr,5)
+        trade_type = "SELL"
 
-        return "signal", f"""🎯 SNIPER SIGNAL ({pair})
+    trade = {
+        "type": trade_type,
+        "tp1": tp1,
+        "sl": sl,
+        "pair": pair
+    }
 
-🟢 BUY
+    return "signal", f"""🎯 SNIPER SIGNAL ({pair})
+
+{'🟢 BUY' if trade_type=='BUY' else '🔴 SELL'}
 Entry: {entry}
 TP1: {tp1}
 SL: {sl}
 
 📊 Confidence: {confidence}%
 ⚡ Strength: {strength}""", trade
-
-    if downtrend and 45 < rsi < 60 and near_resistance:
-        entry = round(price,5)
-        tp1 = round(price-atr,5)
-        sl = round(price+atr,5)
-
-        trade = {"type":"SELL","tp1":tp1,"sl":sl,"pair":pair}
-
-        return "signal", f"""🎯 SNIPER SIGNAL ({pair})
-
-🔴 SELL
-Entry: {entry}
-TP1: {tp1}
-SL: {sl}
-
-📊 Confidence: {confidence}%
-⚡ Strength: {strength}""", trade
-
-    # PRE
-    if uptrend and rsi < 50:
-        return "pre", f"🚨 Signal coming soon ({pair})", None
-
-    if downtrend and rsi > 50:
-        return "pre", f"🚨 Signal coming soon ({pair})", None
-
-    return "wait", "Wait for signal...", None
 
 # =========================
 def send(chat_id, text, keyboard=None):
@@ -178,6 +151,7 @@ def main_keyboard():
     return {
         "keyboard": [
             ["📊 Get Signal"],
+            ["📈 Stats"],
             ["🔙 Back","🛑 Stop"]
         ],
         "resize_keyboard": True
@@ -212,9 +186,18 @@ def handle_updates():
 
             elif text == "📊 Get Signal":
                 status,msg,trade = analyze(user_pair)
-                if status == "signal":
-                    current_trade = trade
+                current_trade = trade
                 send(chat_id,msg,main_keyboard())
+
+            elif text == "📈 Stats":
+                total = wins + losses
+                winrate = (wins/total*100) if total>0 else 0
+
+                send(chat_id,f"""📊 PERFORMANCE
+
+Wins: {wins}
+Losses: {losses}
+Win Rate: {round(winrate,2)}%""",main_keyboard())
 
             elif text == "🔙 Back":
                 bot_active = False
@@ -226,25 +209,20 @@ def handle_updates():
 
 # =========================
 def auto_mode():
-    global last_signal_sent,last_presignal_sent,current_trade
+    global current_trade
 
-    if not user_chat_id or not bot_active:
+    if not bot_active or not user_pair:
         return
 
     status,msg,trade = analyze(user_pair)
 
-    if status == "signal" and msg != last_signal_sent:
-        send(user_chat_id,msg)
-        last_signal_sent = msg
+    if not current_trade:
         current_trade = trade
-
-    elif status == "pre" and msg != last_presignal_sent:
         send(user_chat_id,msg)
-        last_presignal_sent = msg
 
 # =========================
 def track_trade():
-    global current_trade
+    global current_trade, wins, losses
 
     if not current_trade:
         return
@@ -254,23 +232,29 @@ def track_trade():
 
     if current_trade["type"] == "BUY":
         if price >= current_trade["tp1"]:
-            send(user_chat_id,f"✅ TP1 HIT ({current_trade['pair']}) 💰")
+            wins += 1
+            send(user_chat_id,f"✅ TP1 HIT 💰\nWins: {wins}")
             current_trade = None
+
         elif price <= current_trade["sl"]:
-            send(user_chat_id,f"❌ SL HIT ({current_trade['pair']})")
+            losses += 1
+            send(user_chat_id,f"❌ SL HIT\nLosses: {losses}")
             current_trade = None
 
     elif current_trade["type"] == "SELL":
         if price <= current_trade["tp1"]:
-            send(user_chat_id,f"✅ TP1 HIT ({current_trade['pair']}) 💰")
+            wins += 1
+            send(user_chat_id,f"✅ TP1 HIT 💰\nWins: {wins}")
             current_trade = None
+
         elif price >= current_trade["sl"]:
-            send(user_chat_id,f"❌ SL HIT ({current_trade['pair']})")
+            losses += 1
+            send(user_chat_id,f"❌ SL HIT\nLosses: {losses}")
             current_trade = None
 
 # =========================
 def main():
-    print("BOT RUNNING FINAL...")
+    print("ULTIMATE BOT RUNNING...")
 
     while True:
         try:
