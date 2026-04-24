@@ -98,7 +98,7 @@ def analyze(pair):
     else:
         strength = "⚠️ WEAK"
 
-    # ===== FORCE SIGNAL =====
+    # ===== SIGNAL =====
     entry = round(price,5)
 
     if uptrend:
@@ -117,7 +117,7 @@ def analyze(pair):
         "pair": pair
     }
 
-    return "signal", f"""🎯 SNIPER SIGNAL ({pair})
+    return f"""🎯 SNIPER SIGNAL ({pair})
 
 {'🟢 BUY' if trade_type=='BUY' else '🔴 SELL'}
 Entry: {entry}
@@ -177,6 +177,7 @@ def handle_updates():
 
             if text == "/start":
                 bot_active = False
+                current_trade = None
                 send(chat_id,"Select Pair 👇",pair_keyboard())
 
             elif text in ["XAUUSD","EURUSD","GBPUSD","USDJPY","BTCUSD"]:
@@ -185,9 +186,12 @@ def handle_updates():
                 send(chat_id,f"✅ Selected: {text}",main_keyboard())
 
             elif text == "📊 Get Signal":
-                status,msg,trade = analyze(user_pair)
-                current_trade = trade
-                send(chat_id,msg,main_keyboard())
+                if current_trade:
+                    send(chat_id,"⏳ Wait current trade to finish")
+                else:
+                    msg,trade = analyze(user_pair)
+                    current_trade = trade
+                    send(chat_id,msg,main_keyboard())
 
             elif text == "📈 Stats":
                 total = wins + losses
@@ -201,24 +205,13 @@ Win Rate: {round(winrate,2)}%""",main_keyboard())
 
             elif text == "🔙 Back":
                 bot_active = False
+                current_trade = None
                 send(chat_id,"Select Pair 👇",pair_keyboard())
 
             elif text == "🛑 Stop":
                 bot_active = False
+                current_trade = None
                 send(chat_id,"🛑 Bot stopped",pair_keyboard())
-
-# =========================
-def auto_mode():
-    global current_trade
-
-    if not bot_active or not user_pair:
-        return
-
-    status,msg,trade = analyze(user_pair)
-
-    if not current_trade:
-        current_trade = trade
-        send(user_chat_id,msg)
 
 # =========================
 def track_trade():
@@ -230,41 +223,71 @@ def track_trade():
     df = get_data(current_trade["pair"])
     price = df.iloc[-1]["close"]
 
+    tp = current_trade["tp1"]
+    sl = current_trade["sl"]
+
+    buffer = abs(tp - sl) * 0.05  # small tolerance
+
+    # BUY
     if current_trade["type"] == "BUY":
-        if price >= current_trade["tp1"]:
+        if price >= tp - buffer:
             wins += 1
-            send(user_chat_id,f"✅ TP1 HIT 💰\nWins: {wins}")
+            send(user_chat_id,f"""✅ TP HIT 💰
+
+Pair: {current_trade['pair']}
+Result: WIN
+
+Wins: {wins}
+Losses: {losses}""")
             current_trade = None
 
-        elif price <= current_trade["sl"]:
+        elif price <= sl + buffer:
             losses += 1
-            send(user_chat_id,f"❌ SL HIT\nLosses: {losses}")
+            send(user_chat_id,f"""❌ SL HIT
+
+Pair: {current_trade['pair']}
+Result: LOSS
+
+Wins: {wins}
+Losses: {losses}""")
             current_trade = None
 
+    # SELL
     elif current_trade["type"] == "SELL":
-        if price <= current_trade["tp1"]:
+        if price <= tp + buffer:
             wins += 1
-            send(user_chat_id,f"✅ TP1 HIT 💰\nWins: {wins}")
+            send(user_chat_id,f"""✅ TP HIT 💰
+
+Pair: {current_trade['pair']}
+Result: WIN
+
+Wins: {wins}
+Losses: {losses}""")
             current_trade = None
 
-        elif price >= current_trade["sl"]:
+        elif price >= sl - buffer:
             losses += 1
-            send(user_chat_id,f"❌ SL HIT\nLosses: {losses}")
+            send(user_chat_id,f"""❌ SL HIT
+
+Pair: {current_trade['pair']}
+Result: LOSS
+
+Wins: {wins}
+Losses: {losses}""")
             current_trade = None
 
 # =========================
 def main():
-    print("ULTIMATE BOT RUNNING...")
+    print("BOT RUNNING FINAL VERSION...")
 
     while True:
         try:
             handle_updates()
-            auto_mode()
             track_trade()
         except Exception as e:
             print("Error:",e)
 
-        time.sleep(2)
+        time.sleep(1)
 
 # =========================
 if __name__ == "__main__":
