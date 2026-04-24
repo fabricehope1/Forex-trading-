@@ -11,23 +11,22 @@ last_update_id = None
 
 user_pairs = {}
 user_chat_id = None
+bot_active = False
 
 last_signal_sent = ""
 last_presignal_sent = ""
 
+current_trade = None
+
 # =========================
 def get_symbol(pair):
-    mapping = {
+    return {
         "XAUUSD": "XAU/USD",
         "EURUSD": "EUR/USD",
         "GBPUSD": "GBP/USD",
         "USDJPY": "USD/JPY",
-        "AUDUSD": "AUD/USD",
-        "USDCAD": "USD/CAD",
-        "BTCUSD": "BTC/USD",
-        "ETHUSD": "ETH/USD"
-    }
-    return mapping.get(pair, "XAU/USD")
+        "BTCUSD": "BTC/USD"
+    }.get(pair, "XAU/USD")
 
 # =========================
 def get_data(pair):
@@ -70,7 +69,7 @@ def analyze(pair):
     last = df.iloc[-1]
 
     if pd.isna(last["atr"]):
-        return "wait", "⏳ Loading..."
+        return "wait", "Loading...", None
 
     price = last["close"]
     atr = last["atr"]
@@ -85,46 +84,56 @@ def analyze(pair):
     near_support = abs(price - support) < atr
     near_resistance = abs(price - resistance) < atr
 
-    # SNIPER SIGNAL
+    # BUY SIGNAL
     if uptrend and 40 < rsi < 55 and near_support:
+        entry = round(price,5)
+        tp1 = round(price+atr,5)
+        sl = round(price-atr,5)
+
+        trade = {
+            "type": "BUY",
+            "entry": entry,
+            "tp1": tp1,
+            "sl": sl,
+            "pair": pair
+        }
+
         return "signal", f"""🎯 SNIPER SIGNAL ({pair})
 
 🟢 BUY
-Entry: {round(price,5)}
-TP1: {round(price+atr,5)}
-TP2: {round(price+atr*2,5)}
-SL: {round(price-atr,5)}
+Entry: {entry}
+TP1: {tp1}
+SL: {sl}""", trade
 
-🔥 HIGH ACCURACY"""
-
+    # SELL SIGNAL
     if downtrend and 45 < rsi < 60 and near_resistance:
+        entry = round(price,5)
+        tp1 = round(price-atr,5)
+        sl = round(price+atr,5)
+
+        trade = {
+            "type": "SELL",
+            "entry": entry,
+            "tp1": tp1,
+            "sl": sl,
+            "pair": pair
+        }
+
         return "signal", f"""🎯 SNIPER SIGNAL ({pair})
 
 🔴 SELL
-Entry: {round(price,5)}
-TP1: {round(price-atr,5)}
-TP2: {round(price-atr*2,5)}
-SL: {round(price+atr,5)}
-
-🔥 HIGH ACCURACY"""
+Entry: {entry}
+TP1: {tp1}
+SL: {sl}""", trade
 
     # PRE SIGNAL
     if uptrend and rsi < 50:
-        return "pre", f"⚠️ PRE-SIGNAL BUY ({pair})"
+        return "pre", f"🚨 Signal coming soon ({pair})", None
 
     if downtrend and rsi > 50:
-        return "pre", f"⚠️ PRE-SIGNAL SELL ({pair})"
+        return "pre", f"🚨 Signal coming soon ({pair})", None
 
-    # AI PREDICTION
-    prediction = "UP 📈" if uptrend else "DOWN 📉"
-    return "wait", f"""🤖 AI UPDATE ({pair})
-
-📊 Price: {round(price,5)}
-📊 RSI: {round(rsi,1)}
-
-📈 Market: {prediction}
-
-⏳ Waiting for setup..."""
+    return "wait", "Wait for signal...", None
 
 # =========================
 def send(chat_id, text, keyboard=None):
@@ -135,15 +144,6 @@ def send(chat_id, text, keyboard=None):
     })
 
 # =========================
-def main_keyboard():
-    return {
-        "inline_keyboard": [
-            [{"text": "📊 Get Signal", "callback_data": "signal"}],
-            [{"text": "⚙️ Select Pair", "callback_data": "select_pair"}]
-        ]
-    }
-
-# =========================
 def pair_keyboard():
     return {
         "inline_keyboard": [
@@ -151,16 +151,23 @@ def pair_keyboard():
             [{"text": "💶 EURUSD", "callback_data": "EURUSD"}],
             [{"text": "💷 GBPUSD", "callback_data": "GBPUSD"}],
             [{"text": "💴 USDJPY", "callback_data": "USDJPY"}],
-            [{"text": "🇦🇺 AUDUSD", "callback_data": "AUDUSD"}],
-            [{"text": "🇨🇦 USDCAD", "callback_data": "USDCAD"}],
-            [{"text": "🪙 BTCUSD", "callback_data": "BTCUSD"}],
-            [{"text": "💎 ETHUSD", "callback_data": "ETHUSD"}]
+            [{"text": "🪙 BTCUSD", "callback_data": "BTCUSD"}]
+        ]
+    }
+
+# =========================
+def main_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text": "📊 Get Signal", "callback_data": "signal"}],
+            [{"text": "🔙 Back", "callback_data": "back"}],
+            [{"text": "🛑 Stop Bot", "callback_data": "stop"}]
         ]
     }
 
 # =========================
 def handle_updates():
-    global last_update_id, user_chat_id
+    global last_update_id, user_chat_id, bot_active, current_trade
 
     url = f"{BASE_URL}/getUpdates"
     if last_update_id:
@@ -175,16 +182,9 @@ def handle_updates():
             chat_id = update["message"]["chat"]["id"]
             user_chat_id = chat_id
 
-            text = update["message"].get("text", "")
-
-            if text == "/start":
-                user_pairs[chat_id] = "XAUUSD"
-                send(chat_id, "🤖 SNIPER BOT READY 🔥", main_keyboard())
-
-            elif text == "/signal":
-                pair = user_pairs.get(chat_id, "XAUUSD")
-                status, msg = analyze(pair)
-                send(chat_id, msg, main_keyboard())
+            if update["message"].get("text") == "/start":
+                bot_active = False
+                send(chat_id, "Select Pair 👇", pair_keyboard())
 
         if "callback_query" in update:
             chat_id = update["callback_query"]["message"]["chat"]["id"]
@@ -192,45 +192,85 @@ def handle_updates():
 
             data = update["callback_query"]["data"]
 
-            if data == "signal":
-                pair = user_pairs.get(chat_id, "XAUUSD")
-                status, msg = analyze(pair)
+            if data in ["XAUUSD","EURUSD","GBPUSD","USDJPY","BTCUSD"]:
+                user_pairs[chat_id] = data
+                bot_active = True
+                send(chat_id, f"✅ Selected: {data}", main_keyboard())
+
+            elif data == "signal":
+                pair = user_pairs.get(chat_id)
+                status, msg, trade = analyze(pair)
+
+                if status == "signal":
+                    current_trade = trade
+
                 send(chat_id, msg, main_keyboard())
 
-            elif data == "select_pair":
-                send(chat_id, "Select Pair 👇", pair_keyboard())
+            elif data == "back":
+                bot_active = False
+                send(chat_id, "Select another pair 👇", pair_keyboard())
 
-            elif data in ["XAUUSD","EURUSD","GBPUSD","USDJPY","AUDUSD","USDCAD","BTCUSD","ETHUSD"]:
-                user_pairs[chat_id] = data
-                send(chat_id, f"✅ Selected: {data}", main_keyboard())
+            elif data == "stop":
+                bot_active = False
+                send(chat_id, "🛑 Bot stopped", pair_keyboard())
 
 # =========================
 def auto_mode():
-    global last_signal_sent, last_presignal_sent
+    global last_signal_sent, last_presignal_sent, current_trade
 
-    if not user_chat_id:
+    if not user_chat_id or not bot_active:
         return
 
-    pair = user_pairs.get(user_chat_id, "XAUUSD")
+    pair = user_pairs.get(user_chat_id)
 
-    status, msg = analyze(pair)
+    status, msg, trade = analyze(pair)
 
     if status == "signal" and msg != last_signal_sent:
         send(user_chat_id, msg)
         last_signal_sent = msg
+        current_trade = trade
 
     elif status == "pre" and msg != last_presignal_sent:
         send(user_chat_id, msg)
         last_presignal_sent = msg
 
 # =========================
+def track_trade():
+    global current_trade
+
+    if not current_trade or not user_chat_id:
+        return
+
+    df = get_data(current_trade["pair"])
+    price = df.iloc[-1]["close"]
+
+    if current_trade["type"] == "BUY":
+        if price >= current_trade["tp1"]:
+            send(user_chat_id, f"✅ TP1 HIT ({current_trade['pair']}) 💰")
+            current_trade = None
+
+        elif price <= current_trade["sl"]:
+            send(user_chat_id, f"❌ SL HIT ({current_trade['pair']})")
+            current_trade = None
+
+    elif current_trade["type"] == "SELL":
+        if price <= current_trade["tp1"]:
+            send(user_chat_id, f"✅ TP1 HIT ({current_trade['pair']}) 💰")
+            current_trade = None
+
+        elif price >= current_trade["sl"]:
+            send(user_chat_id, f"❌ SL HIT ({current_trade['pair']})")
+            current_trade = None
+
+# =========================
 def main():
-    print("PRIVATE AUTO BOT RUNNING...")
+    print("FINAL BOT RUNNING...")
 
     while True:
         try:
             handle_updates()
             auto_mode()
+            track_trade()
         except Exception as e:
             print("Error:", e)
 
