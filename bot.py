@@ -7,7 +7,6 @@ API_KEY = os.getenv("API_KEY")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
-
 last_update_id = None
 
 # =========================
@@ -45,6 +44,9 @@ def analyze():
     df = get_data()
     df = indicators(df)
 
+    support = df["low"].rolling(20).min().iloc[-1]
+    resistance = df["high"].rolling(20).max().iloc[-1]
+
     last = df.iloc[-1]
 
     if pd.isna(last["atr"]):
@@ -57,38 +59,64 @@ def analyze():
     ma20 = last["ma20"]
     ma50 = last["ma50"]
 
-    # DETERMINE TREND (ALWAYS GIVE SIGNAL)
+    # Trend
     if ma20 > ma50:
-        return f"""📊 GOLD SIGNAL (XAUUSD)
+        trend = "UP"
+    else:
+        trend = "DOWN"
+
+    # Strength
+    strength_val = abs(ma20 - ma50)
+    if strength_val > 1:
+        strength = "STRONG"
+        confidence = "VERY HIGH"
+    else:
+        strength = "WEAK"
+        confidence = "MEDIUM"
+
+    # Breakout
+    breakout_up = price > resistance * 0.995
+    breakout_down = price < support * 1.005
+
+    # ================= BUY =================
+    if trend == "UP":
+        return f"""📊 GOLD VIP SIGNAL (XAUUSD)
 
 🟢 BUY SETUP
 
-📍 Entry: {round(price,2)}
+📍 Entry Zone: {round(price-atr*0.3,2)} - {round(price+atr*0.3,2)}
 🎯 TP1: {round(price+atr,2)}
 🎯 TP2: {round(price+atr*2,2)}
 🎯 TP3: {round(price+atr*3,2)}
 🛑 SL: {round(price-atr,2)}
 
 📊 RSI: {rsi}
-📈 Trend: UP
+📈 Trend: {strength} UP
+📌 Support: {round(support,2)}
+📌 Resistance: {round(resistance,2)}
 
-⚡ Mode: ALWAYS SIGNAL"""
+🔥 Breakout: {"CONFIRMED" if breakout_up else "WAIT"}
+✅ Confidence: {confidence}"""
 
+    # ================= SELL =================
     else:
-        return f"""📊 GOLD SIGNAL (XAUUSD)
+        return f"""📊 GOLD VIP SIGNAL (XAUUSD)
 
 🔴 SELL SETUP
 
-📍 Entry: {round(price,2)}
+📍 Entry Zone: {round(price-atr*0.3,2)} - {round(price+atr*0.3,2)}
 🎯 TP1: {round(price-atr,2)}
 🎯 TP2: {round(price-atr*2,2)}
 🎯 TP3: {round(price-atr*3,2)}
 🛑 SL: {round(price+atr,2)}
 
 📊 RSI: {rsi}
-📉 Trend: DOWN
+📉 Trend: {strength} DOWN
+📌 Support: {round(support,2)}
+📌 Resistance: {round(resistance,2)}
 
-⚡ Mode: ALWAYS SIGNAL"""
+🔥 Breakout: {"CONFIRMED" if breakout_down else "WAIT"}
+✅ Confidence: {confidence}"""
 
 # =========================
 def send_message(chat_id, text):
@@ -123,19 +151,22 @@ def handle_updates():
             text = update["message"].get("text", "")
 
             if text == "/start":
-                send_message(chat_id, "🤖 GOLD BOT READY 🔥\nClick button 👇")
+                send_message(chat_id, "🤖 GOLD VIP BOT READY 🔥\nClick below 👇")
 
             elif text == "/signal":
                 send_message(chat_id, analyze())
 
-        # BUTTON CLICK
+            elif text == "/help":
+                send_message(chat_id, "/start\n/signal\n/help")
+
+        # BUTTON
         if "callback_query" in update:
             chat_id = update["callback_query"]["message"]["chat"]["id"]
             send_message(chat_id, analyze())
 
 # =========================
 def main():
-    print("Bot is running...")
+    print("VIP BOT RUNNING...")
 
     while True:
         try:
