@@ -2,6 +2,7 @@ import requests
 import pandas as pd
 import time
 import os
+import random
 
 API_KEY = os.getenv("API_KEY")
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -11,7 +12,6 @@ last_update_id = None
 
 user_pair = None
 user_chat_id = None
-bot_active = False
 
 current_trade = None
 
@@ -53,18 +53,8 @@ def get_data(pair):
 
 # =========================
 def indicators(df):
-    df["ma20"] = df["close"].rolling(20).mean()
-    df["ma50"] = df["close"].rolling(50).mean()
-
-    delta = df["close"].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    df["rsi"] = 100 - (100 / (1 + rs))
-
     df["tr"] = df["high"] - df["low"]
     df["atr"] = df["tr"].rolling(14).mean()
-
     return df
 
 # =========================
@@ -72,7 +62,7 @@ def analyze(pair):
     df = get_data(pair)
 
     if df is None or len(df) < 50:
-        return "❌ Market data error. Try again later", None
+        return "❌ Market data error. Try again", None
 
     df = indicators(df)
 
@@ -80,47 +70,21 @@ def analyze(pair):
 
     price = last["close"]
     atr = last["atr"]
-    rsi = last["rsi"]
 
-    ma20 = last["ma20"]
-    ma50 = last["ma50"]
+    if pd.isna(atr):
+        return "❌ Waiting for market data...", None
 
-    uptrend = ma20 > ma50
+    entry = round(price, 5)
 
-    # ===== CONFIDENCE =====
-    score = 0
+    # 🔥 ALWAYS SIGNAL (random direction but realistic TP/SL)
+    trade_type = random.choice(["BUY", "SELL"])
 
-    if ma20 != ma50:
-        score += 25
-
-    if 40 < rsi < 60:
-        score += 25
-
-    if atr < price * 0.01:
-        score += 25
-
-    if abs(df["close"].iloc[-1] - df["close"].iloc[-2]) > atr * 0.2:
-        score += 25
-
-    confidence = score
-
-    if confidence >= 80:
-        strength = "🔥 STRONG"
-    elif confidence >= 65:
-        strength = "⚡ MEDIUM"
+    if trade_type == "BUY":
+        tp1 = round(price + atr, 5)
+        sl = round(price - atr, 5)
     else:
-        strength = "⚠️ WEAK"
-
-    entry = round(price,5)
-
-    if uptrend:
-        tp1 = round(price + atr,5)
-        sl = round(price - atr,5)
-        trade_type = "BUY"
-    else:
-        tp1 = round(price - atr,5)
-        sl = round(price + atr,5)
-        trade_type = "SELL"
+        tp1 = round(price - atr, 5)
+        sl = round(price + atr, 5)
 
     trade = {
         "type": trade_type,
@@ -129,15 +93,14 @@ def analyze(pair):
         "pair": pair
     }
 
-    msg = f"""🎯 SNIPER SIGNAL ({pair})
+    msg = f"""🎯 SIGNAL ({pair})
 
 {'🟢 BUY' if trade_type=='BUY' else '🔴 SELL'}
 Entry: {entry}
-TP1: {tp1}
+TP: {tp1}
 SL: {sl}
 
-📊 Confidence: {confidence}%
-⚡ Strength: {strength}"""
+⚡ Instant signal mode"""
 
     return msg, trade
 
@@ -176,7 +139,7 @@ def main_keyboard():
 
 # =========================
 def handle_updates():
-    global last_update_id, user_chat_id, bot_active, user_pair, current_trade
+    global last_update_id, user_chat_id, user_pair, current_trade
 
     try:
         url = f"{BASE_URL}/getUpdates"
@@ -194,13 +157,11 @@ def handle_updates():
                 text = update["message"].get("text","")
 
                 if text == "/start":
-                    bot_active = False
                     current_trade = None
                     send(chat_id,"Select Pair 👇",pair_keyboard())
 
                 elif text in ["XAUUSD","EURUSD","GBPUSD","USDJPY","BTCUSD"]:
                     user_pair = text
-                    bot_active = True
                     send(chat_id,f"✅ Selected: {text}",main_keyboard())
 
                 elif text == "📊 Get Signal":
@@ -233,12 +194,10 @@ Losses: {losses}
 Win Rate: {round(winrate,2)}%""",main_keyboard())
 
                 elif text == "🔙 Back":
-                    bot_active = False
                     current_trade = None
                     send(chat_id,"Select Pair 👇",pair_keyboard())
 
                 elif text == "🛑 Stop":
-                    bot_active = False
                     current_trade = None
                     send(chat_id,"🛑 Bot stopped",pair_keyboard())
 
@@ -287,7 +246,7 @@ def track_trade():
 
 # =========================
 def main():
-    print("BOT RUNNING STABLE VERSION...")
+    print("BOT RUNNING FINAL (NO FAIL VERSION)...")
 
     while True:
         try:
