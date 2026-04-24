@@ -4,21 +4,17 @@ import time
 import os
 
 API_KEY = os.getenv("API_KEY")
-
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 BASE_URL = f"https://api.telegram.org/bot{TOKEN}"
-
-SYMBOL = "XAU/USD"
-INTERVAL = "5min"
 
 last_update_id = None
 last_signal = ""
 
 # =========================
 def get_data():
-    url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={INTERVAL}&outputsize=200&apikey={API_KEY}"
+    url = f"https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=5min&outputsize=200&apikey={API_KEY}"
     data = requests.get(url).json()
 
     df = pd.DataFrame(data["values"])
@@ -47,6 +43,17 @@ def indicators(df):
     return df
 
 # =========================
+def market_status(df):
+    last = df.iloc[-1]
+
+    if last["ma20"] > last["ma50"]:
+        return "📈 TRENDING UP"
+    elif last["ma20"] < last["ma50"]:
+        return "📉 TRENDING DOWN"
+    else:
+        return "⚖️ RANGING"
+
+# =========================
 def analyze():
     df = get_data()
     df = indicators(df)
@@ -54,79 +61,124 @@ def analyze():
     last = df.iloc[-1]
 
     if pd.isna(last["atr"]):
-        return "No data yet..."
+        return None
 
     price = last["close"]
     atr = last["atr"]
+    rsi = round(last["rsi"], 1)
 
-    uptrend = last["ma20"] > last["ma50"]
-    downtrend = last["ma20"] < last["ma50"]
+    ma20 = last["ma20"]
+    ma50 = last["ma50"]
 
-    if uptrend and last["rsi"] < 55:
-        return f"""🔥 BUY GOLD (XAUUSD)
-Entry: {round(price,2)}
-TP: {round(price + atr*2,2)}
-SL: {round(price - atr,2)}"""
+    status = market_status(df)
 
-    if downtrend and last["rsi"] > 45:
-        return f"""🔥 SELL GOLD (XAUUSD)
-Entry: {round(price,2)}
-TP: {round(price - atr*2,2)}
-SL: {round(price + atr,2)}"""
+    # BUY
+    if ma20 > ma50 and rsi < 55:
+        return f"""📊 GOLD SIGNAL (XAUUSD)
+
+🟢 BUY SETUP
+
+📍 Entry Zone: {round(price-atr*0.3,2)} - {round(price+atr*0.3,2)}
+🎯 TP1: {round(price+atr,2)}
+🎯 TP2: {round(price+atr*2,2)}
+🎯 TP3: {round(price+atr*3,2)}
+🛑 SL: {round(price-atr,2)}
+
+📊 RSI: {rsi}
+{status}
+
+✅ Confidence: HIGH"""
+
+    # SELL
+    if ma20 < ma50 and rsi > 45:
+        return f"""📊 GOLD SIGNAL (XAUUSD)
+
+🔴 SELL SETUP
+
+📍 Entry Zone: {round(price-atr*0.3,2)} - {round(price+atr*0.3,2)}
+🎯 TP1: {round(price-atr,2)}
+🎯 TP2: {round(price-atr*2,2)}
+🎯 TP3: {round(price-atr*3,2)}
+🛑 SL: {round(price+atr,2)}
+
+📊 RSI: {rsi}
+{status}
+
+✅ Confidence: HIGH"""
 
     return "❌ No clear signal now"
 
 # =========================
-def send(chat_id, text):
-    requests.get(f"{BASE_URL}/sendMessage", params={
+def send_message(chat_id, text):
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "📊 Get Signal", "callback_data": "signal"}]
+        ]
+    }
+
+    requests.post(f"{BASE_URL}/sendMessage", json={
         "chat_id": chat_id,
-        "text": text
+        "text": text,
+        "reply_markup": keyboard
     })
 
 # =========================
-def check_messages():
+def handle_updates():
     global last_update_id
 
-    url = f"{BASE_URL}/getUpdates"
-    params = {"timeout": 100, "offset": last_update_id}
-
-    res = requests.get(url, params=params).json()
+    res = requests.get(f"{BASE_URL}/getUpdates", params={
+        "offset": last_update_id,
+        "timeout": 100
+    }).json()
 
     for update in res["result"]:
         last_update_id = update["update_id"] + 1
 
-        message = update.get("message", {})
-        chat_id = message.get("chat", {}).get("id")
-        text = message.get("text", "")
+        if "message" in update:
+            chat_id = update["message"]["chat"]["id"]
+            text = update["message"].get("text", "")
 
-        # ===== COMMANDS =====
-        if text == "/start":
-            send(chat_id, "🤖 GOLD BOT READY\n\nType /signal to get trade signal")
+            if text == "/start":
+                send_message(chat_id, "🤖 GOLD BOT ULTIMATE READY 🔥")
 
-        elif text == "/signal":
-            result = analyze()
-            send(chat_id, result)
+            elif text == "/signal":
+                send_message(chat_id, analyze())
 
-        elif text == "/help":
-            send(chat_id, "/start\n/signal\n/help")
+            elif text == "/status":
+                df = indicators(get_data())
+                send_message(chat_id, market_status(df))
+
+            elif text == "/help":
+                send_message(chat_id, "/start\n/signal\n/status\n/help")
+
+        if "callback_query" in update:
+            chat_id = update["callback_query"]["message"]["chat"]["id"]
+            send_message(chat_id, analyze())
 
 # =========================
-def auto_signal():
+def auto_signals():
     global last_signal
 
     try:
         signal = analyze()
 
-        if "BUY" in signal or "SELL" in signal:
-            if signal != last_signal:
-                send(CHAT_ID, signal)
-                print(signal)
-                last_signal = signal
+        if signal and "❌" not in signal and signal != last_signal:
+            send_message(CHAT_ID, signal)
+            last_signal = signal
+            print("Sent new signal")
+        else:
+            print("No new signal")
+
     except Exception as e:
         print("Error:", e)
 
 # =========================
-while True:
-    check_messages()   # reply to user
-    auto_signal()      # send auto signals
-    time.sleep(30)
+def main():
+    while True:
+        handle_updates()
+        auto_signals()
+        time.sleep(300)
+
+# =========================
+if __name__ == "__main__":
+    main()
