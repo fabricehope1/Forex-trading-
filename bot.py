@@ -3,111 +3,101 @@ import pandas as pd
 import time
 import os
 
+API_KEY = os.getenv("API_KEY")
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-SYMBOL = "XAUUSDT"
-INTERVAL = "5m"
-LIMIT = 300
+SYMBOL = "XAU/USD"
+INTERVAL = "5min"
+OUTPUT = 200
 
 # =========================
 def get_data():
-    url = f"https://api.binance.com/api/v3/klines?symbol={SYMBOL}&interval={INTERVAL}&limit={LIMIT}"
-    data = requests.get(url, timeout=10).json()
+    url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={INTERVAL}&outputsize={OUTPUT}&apikey={API_KEY}"
+    data = requests.get(url).json()
 
-    df = pd.DataFrame(data, columns=[
-        "time","open","high","low","close","volume",
-        "close_time","qav","trades","tbbav","tbqav","ignore"
-    ])
+    df = pd.DataFrame(data["values"])
+    df = df.iloc[::-1]  # reverse
+
     df["close"] = df["close"].astype(float)
     df["high"] = df["high"].astype(float)
     df["low"] = df["low"].astype(float)
+
     return df
 
 # =========================
-def calculate_indicators(df):
+def indicators(df):
+    df["ma20"] = df["close"].rolling(20).mean()
     df["ma50"] = df["close"].rolling(50).mean()
-    df["ma200"] = df["close"].rolling(200).mean()
 
-    # RSI
     delta = df["close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     df["rsi"] = 100 - (100 / (1 + rs))
 
-    # ATR (volatility)
     df["tr"] = df["high"] - df["low"]
     df["atr"] = df["tr"].rolling(14).mean()
 
     return df
 
 # =========================
-def support_resistance(df):
-    support = df["low"].rolling(20).min().iloc[-1]
-    resistance = df["high"].rolling(20).max().iloc[-1]
-    return support, resistance
-
-# =========================
 def analyze(df):
-    df = calculate_indicators(df)
-    support, resistance = support_resistance(df)
-
+    df = indicators(df)
     last = df.iloc[-1]
-    price = round(last["close"], 2)
+
+    if pd.isna(last["atr"]):
+        return None
+
+    price = last["close"]
     atr = last["atr"]
 
-    # Trend
-    uptrend = last["ma50"] > last["ma200"]
-    downtrend = last["ma50"] < last["ma200"]
+    uptrend = last["ma20"] > last["ma50"]
+    downtrend = last["ma20"] < last["ma50"]
 
-    # ================= BUY =================
-    if uptrend and last["rsi"] < 40 and price > support:
-        tp = round(price + (atr * 2), 2)
-        sl = round(price - (atr * 1.2), 2)
+    # BUY
+    if uptrend and last["rsi"] < 55:
+        return f"""🔥 BUY GOLD (XAUUSD)
+Entry: {round(price,2)}
+TP: {round(price + atr*2,2)}
+SL: {round(price - atr,2)}"""
 
-        return f"""🔥 BUY GOLD (PRO)
-Entry: {price}
-TP: {tp}
-SL: {sl}
-RSI: {round(last['rsi'],1)}
-Trend: UP"""
-
-    # ================= SELL =================
-    if downtrend and last["rsi"] > 60 and price < resistance:
-        tp = round(price - (atr * 2), 2)
-        sl = round(price + (atr * 1.2), 2)
-
-        return f"""🔥 SELL GOLD (PRO)
-Entry: {price}
-TP: {tp}
-SL: {sl}
-RSI: {round(last['rsi'],1)}
-Trend: DOWN"""
+    # SELL
+    if downtrend and last["rsi"] > 45:
+        return f"""🔥 SELL GOLD (XAUUSD)
+Entry: {round(price,2)}
+TP: {round(price - atr*2,2)}
+SL: {round(price + atr,2)}"""
 
     return None
 
 # =========================
-def send_telegram(message):
+def send(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.get(url, params={"chat_id": CHAT_ID, "text": message})
+    requests.get(url, params={"chat_id": CHAT_ID, "text": msg})
 
 # =========================
-last_signal = ""
+def main():
+    last_signal = ""
 
-while True:
-    try:
-        df = get_data()
-        signal = analyze(df)
+    while True:
+        try:
+            df = get_data()
+            signal = analyze(df)
 
-        if signal and signal != last_signal:
-            send_telegram(signal)
-            print(signal)
-            last_signal = signal
-        else:
-            print("No signal")
+            if signal and signal != last_signal:
+                send(signal)
+                print(signal)
+                last_signal = signal
+            else:
+                print("No signal")
 
-    except Exception as e:
-        print("Error:", e)
+        except Exception as e:
+            print("Error:", e)
 
-    time.sleep(300)
+        time.sleep(300)
+
+# =========================
+if __name__ == "__main__":
+    main()
